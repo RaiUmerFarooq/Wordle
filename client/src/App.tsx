@@ -4,9 +4,13 @@ import { io, Socket } from "socket.io-client";
 type Role = "setter" | "guesser";
 type CellState = "correct" | "present" | "absent" | "empty";
 
-// FIXED: Use env var + delay connect
-const API_URL = import.meta.env.VITE_API_URL?.trim() || "http://localhost:4000";
-const socket: Socket = io(API_URL, {
+// CRITICAL: Use VITE_API_URL with fallback
+const API_URL = import.meta.env.VITE_API_URL?.trim();
+if (!API_URL) {
+  console.error("VITE_API_URL is missing! Add it in Vercel → Settings → Environment Variables");
+}
+
+const socket: Socket = io(API_URL || "http://localhost:4000", {
   autoConnect: false,
   transports: ["websocket"],
 });
@@ -16,6 +20,7 @@ export default function App() {
   const [role, setRole] = useState<Role | null>(null);
   const roleRef = useRef<Role | null>(null);
   useEffect(() => { roleRef.current = role; }, [role]);
+
   const [showModal, setShowModal] = useState(false);
   const [guesses, setGuesses] = useState<string[]>([]);
   const [feedbacks, setFeedbacks] = useState<CellState[][]>([]);
@@ -25,6 +30,8 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState("");
   const [started, setStarted] = useState(false);
   const [round, setRound] = useState(1);
+  const [isConnecting, setIsConnecting] = useState(true);
+  const [connectError, setConnectError] = useState(false);
 
   const handleKey = useCallback(
     (key: string) => {
@@ -41,19 +48,32 @@ export default function App() {
   );
 
   useEffect(() => {
-    // FIXED: Connect only after DOM ready
-    const connectTimer = setTimeout(() => {
-      if (!socket.connected) {
-        console.log("Connecting to:", API_URL);
+    // FIXED: Connect only after DOM is ready
+    const timer = setTimeout(() => {
+      if (API_URL) {
+        console.log("Connecting to server:", API_URL);
         socket.connect();
+      } else {
+        setConnectError(true);
       }
-    }, 100);
+      setIsConnecting(false);
+    }, 200);
 
-    socket.on("connect", () => console.log("Connected:", socket.id));
-    socket.on("disconnect", () => console.log("Disconnected"));
+    socket.on("connect", () => {
+      console.log("Connected to server:", socket.id);
+      setErrorMsg("");
+      setConnectError(false);
+    });
+
+    socket.on("disconnect", (reason) => {
+      console.log("Disconnected:", reason);
+      setErrorMsg(`Disconnected: ${reason}`);
+    });
+
     socket.on("connect_error", (err) => {
       console.error("Connection failed:", err.message);
-      setErrorMsg("Cannot connect to server");
+      setErrorMsg("Cannot reach server. Check URL.");
+      setConnectError(true);
     });
 
     socket.on("room-created", ({ room, role }: { room: string; role: Role }) => {
@@ -107,7 +127,7 @@ export default function App() {
     socket.on("error", (msg: string) => setErrorMsg(msg));
 
     return () => {
-      clearTimeout(connectTimer);
+      clearTimeout(timer);
       socket.off();
       socket.disconnect();
     };
@@ -142,6 +162,30 @@ export default function App() {
     }
   }, [gameOver, room]);
 
+  // FIXED: Show loading, error, or lobby
+  if (isConnecting) {
+    return (
+      <div className="app-container" style={{ textAlign: "center", padding: "2rem" }}>
+        <h1 className="title">Wordle Duel</h1>
+        <p style={{ color: "#9ca3af" }}>Connecting to server...</p>
+      </div>
+    );
+  }
+
+  if (!API_URL || connectError) {
+    return (
+      <div className="app-container" style={{ textAlign: "center", padding: "2rem" }}>
+        <h1 className="title">Wordle Duel</h1>
+        <p style={{ color: "#ef4444", margin: "1rem 0" }}>
+          {API_URL ? "Cannot connect to server" : "VITE_API_URL not set"}
+        </p>
+        <p style={{ color: "#9ca3af", fontSize: "0.9rem" }}>
+          {API_URL ? "Check server URL" : "Add VITE_API_URL in Vercel"}
+        </p>
+      </div>
+    );
+  }
+
   if (!room) {
     return <Lobby onCreate={createRoom} onJoin={joinRoom} error={errorMsg} />;
   }
@@ -157,6 +201,7 @@ export default function App() {
     return s === "correct" ? 2 : s === "present" ? 1 : 0;
   }
 
+  // === GUESSER VIEW ===
   if (role === "guesser") {
     if (!started) {
       return (
@@ -168,19 +213,20 @@ export default function App() {
         </div>
       );
     }
+
     return (
       <div className="app-container">
         <h1 className="title">Wordle Duel</h1>
         <p className="room-code">Room: {room} • Round {round}</p>
         {errorMsg && <p className="error">{errorMsg}</p>}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem', fontSize: '0.875rem', color: '#9ca3af' }}>
+        <div className="status-row">
           <div>Attempts: {guesses.length} / 6</div>
           <div>{gameOver ? (won ? "You won!" : "You lost!") : "Good luck!"}</div>
         </div>
         <Board guesses={guesses} feedbacks={feedbacks} current={current} />
         <Keyboard onKey={handleKey} letterStates={letterStates} disabled={gameOver} />
         {gameOver && (
-          <p className={`game-over ${won ? "" : "lost"}`} style={{ marginTop: '1.5rem' }}>
+          <p className={`game-over ${won ? "" : "lost"}`}>
             {won ? "YOU WON! Get ready to set the word..." : "YOU LOST! Your turn to set..."}
           </p>
         )}
@@ -188,6 +234,7 @@ export default function App() {
     );
   }
 
+  // === SETTER VIEW ===
   if (role === "setter") {
     if (started) {
       return (
@@ -197,13 +244,14 @@ export default function App() {
           {errorMsg && <p className="error">{errorMsg}</p>}
           <Board guesses={guesses} feedbacks={feedbacks} current={current} />
           {gameOver && (
-            <p className={`game-over ${won ? "" : "lost"}`} style={{ marginTop: '1.5rem' }}>
+            <p className={`game-over ${won ? "" : "lost"}`}>
               {won ? "YOU WON! Get ready to guess..." : "YOU LOST! Your turn to guess..."}
             </p>
           )}
         </div>
       );
     }
+
     return (
       <div className="app-container">
         <h1 className="title">Wordle Duel</h1>
@@ -218,27 +266,21 @@ export default function App() {
   return null;
 }
 
+// === BOARD ===
 function Board({ guesses, feedbacks, current }: { guesses: string[]; feedbacks: CellState[][]; current: string }) {
   const rows = [
-    // Completed guesses
     ...guesses.map((g, i) => ({
       word: g,
       fb: feedbacks[i],
       revealed: true
     })),
-    // Current guess
-    {
-      word: current.padEnd(5, " "),
-      fb: Array(5).fill("empty" as CellState),
-      revealed: false
-    },
-    // Empty rows (only if needed)
+    { word: current.padEnd(5, " "), fb: Array(5).fill("empty" as CellState), revealed: false },
     ...Array.from({ length: 5 - guesses.length }, () => ({
       word: "     ",
       fb: Array(5).fill("empty" as CellState),
       revealed: false
     }))
-  ].slice(0, 6); // Always 6 rows
+  ].slice(0, 6);
 
   return (
     <div className="board">
@@ -247,13 +289,11 @@ function Board({ guesses, feedbacks, current }: { guesses: string[]; feedbacks: 
           {row.word.split("").map((letter, j) => {
             const state = row.fb[j];
             let className = "tile";
-
             if (row.revealed && state !== "empty") {
               className += ` revealed ${state}`;
             } else if (letter !== " ") {
               className += " filled";
             }
-
             return (
               <div key={j} className={className}>
                 <span>{letter}</span>
@@ -266,6 +306,7 @@ function Board({ guesses, feedbacks, current }: { guesses: string[]; feedbacks: 
   );
 }
 
+// === KEYBOARD ===
 function Keyboard({ onKey, letterStates, disabled }: any) {
   const rows = [
     ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
@@ -304,6 +345,7 @@ function Keyboard({ onKey, letterStates, disabled }: any) {
   );
 }
 
+// === MODAL ===
 function SetWordModal({ room, socket, onClose }: any) {
   const [word, setWord] = useState("");
   const [error, setError] = useState("");
@@ -343,6 +385,7 @@ function SetWordModal({ room, socket, onClose }: any) {
   );
 }
 
+// === LOBBY ===
 function Lobby({ onCreate, onJoin, error }: any) {
   const [code, setCode] = useState("");
   return (
