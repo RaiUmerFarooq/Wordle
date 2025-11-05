@@ -1,6 +1,6 @@
 import express from "express";
 import http from "http";
-import { Server } from "socket.io";
+import { Server, Socket } from "socket.io";
 import dotenv from "dotenv";
 
 // Load .env
@@ -9,7 +9,7 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
-// FIXED: Use FRONTEND_URL from .env
+// CORS: Use FRONTEND_URL from .env
 const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
 
 const io = new Server(server, {
@@ -19,6 +19,8 @@ const io = new Server(server, {
     credentials: true,
   },
 });
+
+console.log("CORS enabled for:", frontendUrl);
 
 type Role = "setter" | "guesser";
 
@@ -62,7 +64,7 @@ function evaluate(guess: string, secret: string): ("correct" | "present" | "abse
   return result;
 }
 
-io.on("connection", (socket) => {
+io.on("connection", (socket: Socket) => {
   console.log("CONNECTED:", socket.id);
 
   socket.on("create", () => {
@@ -78,9 +80,10 @@ io.on("connection", (socket) => {
     });
     socket.join(room);
     socket.emit("room-created", { room, role: "setter" });
+    console.log("Room created:", room);
   });
 
-  socket.on("join", ({ room }) => {
+  socket.on("join", ({ room }: { room: string }) => {
     const game = games.get(room);
     if (!game) return socket.emit("error", "Room not found");
     if (game.players.includes("guesser")) return socket.emit("error", "Room full");
@@ -91,15 +94,19 @@ io.on("connection", (socket) => {
     socket.emit("room-joined", { room, role: "guesser" });
 
     const setter = game.setterSocketId ? io.sockets.sockets.get(game.setterSocketId) : null;
-    if (setter && setter.rooms.has(room)) setter.emit("opponent-joined");
+    if (setter && setter.rooms.has(room)) {
+      setter.emit("opponent-joined");
+    }
 
     if (game.locked && !game.started) {
       game.started = true;
       io.to(room).emit("game-started");
     }
+
+    console.log("Guesser joined:", room);
   });
 
-  socket.on("set-word", ({ room, word }) => {
+  socket.on("set-word", ({ room, word }: { room: string; word: string }) => {
     const game = games.get(room);
     if (!game || game.secret || game.setterSocketId !== socket.id) return;
     const w = word.toUpperCase();
@@ -112,9 +119,11 @@ io.on("connection", (socket) => {
       game.started = true;
       io.to(room).emit("game-started");
     }
+
+    console.log("Word locked:", w, "in room:", room);
   });
 
-  socket.on("guess", ({ room, guess }) => {
+  socket.on("guess", ({ room, guess }: { room: string; guess: string }) => {
     const game = games.get(room);
     if (!game || !game.secret || !game.started) return;
     const g = guess.toUpperCase();
@@ -128,9 +137,10 @@ io.on("connection", (socket) => {
     const over = won || game.guesses.length >= 6;
 
     io.to(room).emit("guess-result", { guess: g, feedback: fb, won, over });
+    console.log("Guess:", g, "→", fb, "Won:", won);
   });
 
-  socket.on("request-role-swap", ({ room }) => {
+  socket.on("request-role-swap", ({ room }: { room: string }) => {
     const game = games.get(room);
     if (!game || !game.started || game.players.length < 2) return;
 
@@ -152,11 +162,13 @@ io.on("connection", (socket) => {
     });
 
     setTimeout(() => {
-      const newSetter = io.sockets.sockets.get(newSetterId);
+      const newSetter = newSetterId ? io.sockets.sockets.get(newSetterId) : null;
       if (newSetter && newSetter.rooms.has(room)) {
         newSetter.emit("opponent-joined");
       }
     }, 800);
+
+    console.log("Roles swapped in room:", room);
   });
 
   socket.on("disconnect", () => {
@@ -166,8 +178,14 @@ io.on("connection", (socket) => {
 
 // Health check
 app.get("/", (req, res) => {
-  res.send(`Wordle Duel Server Running! frontendUrl=${frontendUrl}`);
+  res.send("Wordle Duel Server Running!");
 });
 
-// Vercel serverless export
-module.exports = app;
+// Render.com: Listen on PORT
+const PORT = process.env.PORT || 4000;
+server.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
+
+// Vercel: Export for serverless
+export default app;
