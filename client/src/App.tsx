@@ -1,13 +1,15 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { io, Socket } from "socket.io-client";
 
-const socket: Socket = io(import.meta.env.VITE_API_URL || "http://localhost:4000", {
+type Role = "setter" | "guesser";
+type CellState = "correct" | "present" | "absent" | "empty";
+
+// FIXED: Use env var + delay connect
+const API_URL = import.meta.env.VITE_API_URL?.trim() || "http://localhost:4000";
+const socket: Socket = io(API_URL, {
   autoConnect: false,
   transports: ["websocket"],
 });
-
-type Role = "setter" | "guesser";
-type CellState = "correct" | "present" | "absent" | "empty";
 
 export default function App() {
   const [room, setRoom] = useState<string | null>(null);
@@ -39,17 +41,19 @@ export default function App() {
   );
 
   useEffect(() => {
-    socket.connect();
-
-    socket.on("disconnect", (reason: any) => {
-      console.log("Socket disconnected:", reason);
-      setErrorMsg(`Disconnected: ${reason}`);
-    });
+    // FIXED: Connect only after DOM ready
+    const connectTimer = setTimeout(() => {
+      if (!socket.connected) {
+        console.log("Connecting to:", API_URL);
+        socket.connect();
+      }
+    }, 100);
 
     socket.on("connect", () => console.log("Connected:", socket.id));
+    socket.on("disconnect", () => console.log("Disconnected"));
     socket.on("connect_error", (err) => {
-      console.error("Error:", err);
-      setErrorMsg("Server down");
+      console.error("Connection failed:", err.message);
+      setErrorMsg("Cannot connect to server");
     });
 
     socket.on("room-created", ({ room, role }: { room: string; role: Role }) => {
@@ -64,7 +68,7 @@ export default function App() {
     });
 
     socket.on("opponent-joined", () => {
-      if (role === "setter") setShowModal(true);
+      if (roleRef.current === "setter") setShowModal(true);
     });
 
     socket.on("game-started", () => {
@@ -79,8 +83,8 @@ export default function App() {
     });
 
     socket.on("guess-result", ({ guess, feedback, won, over }: any) => {
-      setGuesses((g) => [...g, guess]);
-      setFeedbacks((f) => [...f, feedback]);
+      setGuesses(g => [...g, guess]);
+      setFeedbacks(f => [...f, feedback]);
       setCurrent("");
       if (over) {
         setGameOver(true);
@@ -88,11 +92,7 @@ export default function App() {
       }
     });
 
-    socket.on("error", (msg: string) => setErrorMsg(msg));
-
-    // NEW: Listen for role swap
     socket.on("roles-swapped", ({ newRole }: { newRole: Role }) => {
-      console.log("Roles swapped! You are now:", newRole);
       setRole(newRole);
       setShowModal(newRole === "setter");
       setStarted(false);
@@ -104,8 +104,12 @@ export default function App() {
       setRound(r => r + 1);
     });
 
+    socket.on("error", (msg: string) => setErrorMsg(msg));
+
     return () => {
+      clearTimeout(connectTimer);
       socket.off();
+      socket.disconnect();
     };
   }, []);
 
@@ -129,7 +133,6 @@ export default function App() {
     setStarted(false);
   }, [room]);
 
-  // Auto swap roles when game ends
   useEffect(() => {
     if (gameOver && room) {
       const timer = setTimeout(() => {
