@@ -1,18 +1,22 @@
 import express from "express";
 import http from "http";
-import { Server, Socket } from "socket.io";
+import { Server } from "socket.io";
+import dotenv from "dotenv";
+
+// Load .env
+dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
 
-// FIXED: Vercel CORS + dynamic origin
+// FIXED: Use FRONTEND_URL from .env
+const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+
 const io = new Server(server, {
   cors: {
-    origin: process.env.NODE_ENV === "production"
-      ? ["https://your-frontend.vercel.app"]  // REPLACE WITH YOUR FRONTEND URL
-      : "*",
+    origin: frontendUrl,
     methods: ["GET", "POST"],
-    credentials: true
+    credentials: true,
   },
 });
 
@@ -58,7 +62,7 @@ function evaluate(guess: string, secret: string): ("correct" | "present" | "abse
   return result;
 }
 
-io.on("connection", (socket: Socket) => {
+io.on("connection", (socket) => {
   console.log("CONNECTED:", socket.id);
 
   socket.on("create", () => {
@@ -76,7 +80,7 @@ io.on("connection", (socket: Socket) => {
     socket.emit("room-created", { room, role: "setter" });
   });
 
-  socket.on("join", ({ room }: { room: string }) => {
+  socket.on("join", ({ room }) => {
     const game = games.get(room);
     if (!game) return socket.emit("error", "Room not found");
     if (game.players.includes("guesser")) return socket.emit("error", "Room full");
@@ -86,7 +90,7 @@ io.on("connection", (socket: Socket) => {
     socket.join(room);
     socket.emit("room-joined", { room, role: "guesser" });
 
-    const setter = io.sockets.sockets.get(game.setterSocketId || "");
+    const setter = io.sockets.sockets.get(game.setterSocketId);
     if (setter && setter.rooms.has(room)) setter.emit("opponent-joined");
 
     if (game.locked && !game.started) {
@@ -95,7 +99,7 @@ io.on("connection", (socket: Socket) => {
     }
   });
 
-  socket.on("set-word", ({ room, word }: { room: string; word: string }) => {
+  socket.on("set-word", ({ room, word }) => {
     const game = games.get(room);
     if (!game || game.secret || game.setterSocketId !== socket.id) return;
     const w = word.toUpperCase();
@@ -110,7 +114,7 @@ io.on("connection", (socket: Socket) => {
     }
   });
 
-  socket.on("guess", ({ room, guess }: { room: string; guess: string }) => {
+  socket.on("guess", ({ room, guess }) => {
     const game = games.get(room);
     if (!game || !game.secret || !game.started) return;
     const g = guess.toUpperCase();
@@ -126,7 +130,7 @@ io.on("connection", (socket: Socket) => {
     io.to(room).emit("guess-result", { guess: g, feedback: fb, won, over });
   });
 
-  socket.on("request-role-swap", ({ room }: { room: string }) => {
+  socket.on("request-role-swap", ({ room }) => {
     const game = games.get(room);
     if (!game || !game.started || game.players.length < 2) return;
 
@@ -165,10 +169,5 @@ app.get("/", (req, res) => {
   res.send("Wordle Duel Server Running!");
 });
 
-// FIXED: Use Vercel PORT + export
-const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
-export default app;
+// Vercel serverless export
+module.exports = app;
