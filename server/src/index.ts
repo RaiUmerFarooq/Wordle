@@ -166,7 +166,7 @@ io.on("connection", (socket) => {
 
 // Health check
 app.get("/", (req, res) => {
-  res.send("Wordle Duel Server Running!");
+  res.send(`Wordle Duel Server Running! frontendUrl=${frontendUrl}`);
 });
 
 // Vercel serverless export
