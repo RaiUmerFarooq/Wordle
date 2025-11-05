@@ -90,7 +90,7 @@ io.on("connection", (socket) => {
     socket.join(room);
     socket.emit("room-joined", { room, role: "guesser" });
 
-    const setter = io.sockets.sockets.get(game.setterSocketId);
+    const setter = game.setterSocketId ? io.sockets.sockets.get(game.setterSocketId) : null;
     if (setter && setter.rooms.has(room)) setter.emit("opponent-joined");
 
     if (game.locked && !game.started) {
